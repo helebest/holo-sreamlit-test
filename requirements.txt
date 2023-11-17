@@ -3,3 +3,8 @@ numpy
 pandas
 pydeck
 streamlit
+openai
+python-dotenv
+requests
+pdfkit
+beautifulsoup4
