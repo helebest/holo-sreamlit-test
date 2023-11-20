@@ -1,16 +1,24 @@
 import os
+import io
+import re
 import time
+import base64
+from hashlib import md5
+from typing import Tuple
 import streamlit as st
-from dotenv import load_dotenv, find_dotenv
 from openai import OpenAI
+from streamlit.logger import get_logger
+from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
+
+LOGGER = get_logger(__name__)
+FILE_STORE = './data'
+
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 # Set up the Streamlit page with a title and icon
 st.set_page_config(page_title="你的AI助理", layout="wide", page_icon=":speech_balloon:")
-
-default_title = '新的对话'
 
 # Set a default model
 if "openai_model" not in st.session_state:
@@ -19,49 +27,94 @@ if "openai_model" not in st.session_state:
 if 'index' not in st.session_state:
     st.session_state.index = 0
 
+if 'file_id_list' not in st.session_state:
+    st.session_state.file_id_list = []
+
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 
+def check_and_upload(ufile):
+    file_bytes = io.BytesIO(ufile.getvalue())
+    md5sum = md5(file_bytes.getbuffer()).hexdigest()
+    existed = len(list(filter(lambda x: x[2] == md5sum, st.session_state.file_id_list)))
+    if existed == 0:
+        response = client.files.create(file=file_bytes, purpose="assistants")
+        st.session_state.file_id_list.append((response.id, ufile.name, md5sum))
+        LOGGER.info(f'uploaded file: {ufile.name} with id={response.id} and md5={md5sum}')
+    else:
+        LOGGER.info(f'uploaded file: {ufile.name} already existed')
+
+
+def download_file(fileId: str, fileName: str = 'download.csv') -> Tuple[str, str]:
+    file_object = client.files.content(fileId)
+    local_path = os.sep.join([FILE_STORE, fileId])
+    with open(local_path, "wb") as file:
+        file.write(file_object.content)
+    file_str = base64.b64encode(file_object.content).decode()
+    hyper_link = f'<a href="data:file/txt;base64,{file_str}" download="{fileName}">{fileName}</a>'
+    LOGGER.info(f'saved file at local: {local_path}')
+    return local_path, hyper_link
+
+
 def process_message_with_citations(msg):
     """Extract content and annotations from the message and format citations as footnotes."""
+    LOGGER.info(f'message_content={msg}')
     message_content = msg.content[0].text
     annotations = message_content.annotations if hasattr(message_content, 'annotations') else []
     citations = []
-
-    # Iterate over the annotations and add footnotes
-    for index, annotation in enumerate(annotations):
-        # Replace the text with a footnote
-        message_content.value = message_content.value.replace(annotation.text, f' [{index + 1}]')
-
-        # Gather citations based on annotation attributes
-        if file_citation := getattr(annotation, 'file_citation', None):
-            # Retrieve the cited file details (dummy response here since we can't call OpenAI)
-            cited_file = {'filename': 'cited_document.pdf'}  # This should be replaced with actual file retrieval
-            citations.append(f'[{index + 1}] {file_citation.quote} from {cited_file["filename"]}')
-        elif file_path := getattr(annotation, 'file_path', None):
-            # Placeholder for file download citation
-            cited_file = {'filename': 'downloaded_document.pdf'}  # This should be replaced with actual file retrieval
-            citations.append(
-                f'[{index + 1}] Click [here](#) to download {cited_file["filename"]}')  # The download link should be replaced with the actual download path
-    # Add footnotes to the end of the message content
-    full_resp = message_content.value + '\n\n' + '\n'.join(citations)
+    if len(annotations) == 0:
+        ret = re.findall(r'\n\n\[(.*?)\]\((.*?)\)', message_content.value)
+        if len(ret) == 1:
+            link_name, file_path = ret[0]
+            fileId = file_path.split(os.sep)[-1]
+            local_path, hyper_link = download_file(fileId)
+            message_content.value = message_content.value.replace(f'[{link_name}]({file_path})', hyper_link)
+        full_resp = message_content.value
+    elif len(annotations) == 1:
+        ret = re.findall(r'\n\n\[(.*?)\]\((.*?)\)', message_content.value)
+        if len(ret) == 1:
+            link_name, file_path = ret[0]
+            file_name = file_path.split(os.sep)[-1]
+            if anno_file_path := getattr(annotations[0], 'file_path', None):
+                local_path, hyper_link = download_file(anno_file_path.file_id, file_name)
+                message_content.value = message_content.value.replace(f'[{link_name}]({file_path})', hyper_link)
+        full_resp = message_content.value
+    else:
+        # Iterate over the annotations and add footnotes
+        for index, annotation in enumerate(annotations):
+            # Replace the text with a footnote
+            message_content.value = message_content.value.replace(annotation.text, f' [{index}]')
+            # Gather citations based on annotation attributes
+            if anno_file_citation := getattr(annotation, 'file_citation', None):
+                cited_file = client.files.retrieve(anno_file_citation.file_id)
+                citations.append(f'[{index}] {anno_file_citation.quote} 来自 {cited_file.filename}')
+            elif anno_file_path := getattr(annotation, 'file_path', None):
+                local_path, hyper_link = download_file(anno_file_path.file_id)
+                citations.append(f'[{index}] {hyper_link}')
+        full_resp = message_content.value + '\n\n' + '\n'.join(citations)
     return full_resp
 
 
 with st.sidebar:
+    st.image('assets/logo.png')
+    st.subheader('', divider='blue')
     st.sidebar.header("设置")
     assistant_id = st.sidebar.text_input("输入助理ID")
     st.session_state.assistant_id = assistant_id
 
+    uploaded_file = st.sidebar.file_uploader('请上传文件', type=["csv", "xls", "xlsx"],
+                                             label_visibility='collapsed', key='file_uploader')
+    if uploaded_file is not None:
+        check_and_upload(uploaded_file)
 
 # Display chat messages from history on app rerun
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        st.markdown(message["content"], unsafe_allow_html=True)
 
-if prompt := st.chat_input("说点什么吧?"):
+if prompt := st.chat_input("想分析什么数据?"):
 
     if "thread_id" not in st.session_state:
         thread = client.beta.threads.create()
@@ -76,7 +129,9 @@ if prompt := st.chat_input("说点什么吧?"):
         client.beta.threads.messages.create(
             thread_id=st.session_state.thread_id,
             role="user",
-            content=prompt
+            content=prompt,
+            file_ids=[f_id for f_id, f_name, f_md5 in st.session_state.file_id_list],
+            metadata={f_id: f_name for f_id, f_name, f_md5 in st.session_state.file_id_list}
         )
         # Create a run with additional instructions
         run = client.beta.threads.runs.create(
@@ -86,7 +141,9 @@ if prompt := st.chat_input("说点什么吧?"):
 
         # Poll for the run to complete and retrieve the assistant's messages
         while run.status != 'completed':
+            message_placeholder.markdown("▌")
             time.sleep(2)
+            message_placeholder.markdown(" ")
             run = client.beta.threads.runs.retrieve(
                 thread_id=st.session_state.thread_id,
                 run_id=run.id
@@ -106,6 +163,6 @@ if prompt := st.chat_input("说点什么吧?"):
         ]
         for message in assistant_messages_for_run:
             full_response = process_message_with_citations(message)
-            message_placeholder.markdown(full_response)
+            message_placeholder.markdown(full_response, unsafe_allow_html=True)
             break
     st.session_state.messages.append({"role": "assistant", "content": full_response})
