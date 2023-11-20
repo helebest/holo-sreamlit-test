@@ -109,6 +109,23 @@ with st.sidebar:
     if uploaded_file is not None:
         check_and_upload(uploaded_file)
 
+
+if "thread_id" not in st.session_state:
+    st.markdown(
+        """
+        # 欢迎使用数据分析小助理 #
+        ---
+        ### 使用步骤 ###
+        1. 在设置栏中输入小助理ID
+        2. 上传你要分析的csv或者excel文件
+        3. 在对话框内输入你要查询的数据
+        ### 查询示例 ###
+        - 找出`aum`最高的前10名用户姓名以及他们的理财师和最近联系时间(`last_contact_time`)，结果用表格展示
+        - 最近10天有赎回的用户是哪些？他们的理财师在这段时间有跟他们联系过吗？
+        - 找出近30天没有电话联系的用户姓名和对应的理财师，以及他们上次电话联系的时间(`last_call_time`)，结果用表格展示
+    """
+    )
+
 # Display chat messages from history on app rerun
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):

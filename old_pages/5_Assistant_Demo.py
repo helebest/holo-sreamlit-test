@@ -7,7 +7,7 @@ import pdfkit
 import time
 
 # Set your OpenAI Assistant ID here
-assistant_id = 'asst_g9406xS6U683Rgtit73TcfVc'
+assistant_id = ''
 
 # Initialize the OpenAI client (ensure to set your API key in the sidebar within the app)
 client = openai
