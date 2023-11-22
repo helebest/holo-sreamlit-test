@@ -3,6 +3,7 @@ import io
 import re
 import time
 import base64
+from tempfile import NamedTemporaryFile
 from hashlib import md5
 from typing import Tuple
 import streamlit as st
@@ -36,12 +37,16 @@ if "messages" not in st.session_state:
 
 
 def check_and_upload(ufile):
-    file_bytes = io.BytesIO(ufile.getvalue())
-    md5sum = md5(file_bytes.getbuffer()).hexdigest()
+    file_prefix, file_suffix = os.path.splitext(ufile.name)
+    file_bytes = ufile.read()
+    md5sum = md5(file_bytes).hexdigest()
     existed = len(list(filter(lambda x: x[2] == md5sum, st.session_state.file_id_list)))
     if existed == 0:
-        response = client.files.create(file=file_bytes, purpose="assistants")
-        st.session_state.file_id_list.append((response.id, ufile.name, md5sum))
+        with NamedTemporaryFile(dir=FILE_STORE, prefix=file_prefix, suffix=file_suffix) as f:
+            f.write(file_bytes)
+            f.flush()
+            response = client.files.create(file=open(f.name, 'rb'), purpose="assistants")
+            st.session_state.file_id_list.append((response.id, ufile.name, md5sum))
         LOGGER.info(f'uploaded file: {ufile.name} with id={response.id} and md5={md5sum}')
     else:
         LOGGER.info(f'uploaded file: {ufile.name} already existed')
@@ -116,13 +121,13 @@ if "thread_id" not in st.session_state:
         # 欢迎使用数据分析小助理 #
         ---
         ### 使用步骤 ###
-        1. 在设置栏中输入小助理ID
+        1. 在设置栏中输入小助理ID，__并回车__
         2. 上传你要分析的csv或者excel文件
         3. 在对话框内输入你要查询的数据
         ### 查询示例 ###
-        - 找出`aum`最高的前10名用户姓名以及他们的理财师和最近联系时间(`last_contact_time`)，结果用表格展示
-        - 最近10天有赎回的用户是哪些？他们的理财师在这段时间有跟他们联系过吗？
-        - 找出近30天没有电话联系的用户姓名和对应的理财师，以及他们上次电话联系的时间(`last_call_time`)，结果用表格展示
+        - ``找出`aum`最高的前10名用户姓名以及他们的理财师和最近联系时间(`last_contact_time`)，结果用表格展示``
+        - ``最近10天有赎回的用户是哪些？他们的理财师在这段时间有跟他们联系过吗？``
+        - ``找出近30天没有电话联系的用户姓名和对应的理财师，以及他们上次电话联系的时间(`last_call_time`)，用表格展示并提供下载链接``
     """
     )
 
